@@ -29,6 +29,7 @@ export default function (rootDir, listen, proxy, pqc, p2pCfg, config, onConfigUp
   var acl = {}
   var apps = null
   var exited = false
+  var meshReady = false
 
   var epEnv = {
     id: config.agent.id,
@@ -255,11 +256,20 @@ export default function (rootDir, listen, proxy, pqc, p2pCfg, config, onConfigUp
                   p2p.setLocalIP(conn.localAddress)
                 }
                 
+                if (!meshReady) {
+                  meshReady = true
+                  logInfo(`Mesh ready via hub ${address}`)
+                  startAllApps()
+                }
+                
                 advertiseFilesystem(filesystemLatest)
                 advertiseACL(aclLatest)
               } else if (conn.state === 'closed') {
                 logInfo(`Connection to hub ${address} closed`)
                 connections.delete(conn)
+                if (!hubActive.some(h => h.isConnected())) {
+                  meshReady = false
+                }
               }
             }
           }))
@@ -267,6 +277,9 @@ export default function (rootDir, listen, proxy, pqc, p2pCfg, config, onConfigUp
             (eos) => {
               meshError(`Connection to hub ${address} closed, error = ${eos.error}`)
               numFailures++
+              if (!hubActive.some(h => h.isConnected())) {
+                meshReady = false
+              }
             }
           )
         )
@@ -1197,20 +1210,6 @@ export default function (rootDir, listen, proxy, pqc, p2pCfg, config, onConfigUp
 
       // Start P2P listener and register our connection info
       startP2PServices()
-
-      function startAllApps() {
-        if (isConnected()) {
-          db.allApps(meshName).forEach(app => {
-            if (app.state === 'running' && app.username === username) {
-              var appname = app.name
-              if (app.tag) appname += '@' + app.tag
-              startApp(config.agent.id, app.provider, appname)
-            }
-          })
-        } else {
-          new Timeout(1).wait().then(startAllApps)
-        }
-      }
 
       var hubLabel = hub.zone ? `${hub.port} in ${hub.zone}` : hub.port
       logInfo(`Joined ${meshName} as ${config.agent.name} (uuid = ${config.agent.id}) via hub ${hubLabel}`)
@@ -2420,6 +2419,21 @@ export default function (rootDir, listen, proxy, pqc, p2pCfg, config, onConfigUp
 
   function isConnected() {
     return hubActive.some(h => h.isConnected())
+  }
+
+  function isMeshReady() {
+    return meshReady
+  }
+
+  function startAllApps() {
+    if (!isMeshReady()) return
+    db.allApps(meshName).forEach(app => {
+      if (app.state === 'running' && app.username === username) {
+        var appname = app.name
+        if (app.tag) appname += '@' + app.tag
+        startApp(config.agent.id, app.provider, appname)
+      }
+    })
   }
 
   function checkConnectivity() {
